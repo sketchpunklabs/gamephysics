@@ -30,7 +30,7 @@ window.addEventListener( "load", async _=>{
     App.add( (Debug.ln  = new DynLinesMesh() ) );
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    const gltf = await Gltf2.fetch( '../../assets/models/marble_kit.gltf' );
+    const gltf = await Gltf2.fetch( '../assets/models/marble_kit.gltf' );
     let mesh = UtilGltf2.loadMesh( gltf, 'slant_solid_long_C', new THREE.MeshPhongMaterial() );
     App.add( mesh );
     Ref.track = [ mesh ];
