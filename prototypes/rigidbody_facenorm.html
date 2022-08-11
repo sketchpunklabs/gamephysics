@@ -4,6 +4,7 @@ import ShapePointsMesh     	from '../lib/meshes/ShapePointsMesh.js';
 import DynLinesMesh        	from '../lib/meshes/DynLineMesh.js';
 import { UtilGltf2, Gltf2 } from '../lib/UtilGltf2.js';
 import { vec3, quat }       from 'gl-matrix';
+import TrackLoader          from './lib/TrackLoader.js';
 
 let App;
 let Debug = {};
@@ -20,75 +21,56 @@ let Ref = {
     ray     : new THREE.Raycaster(),
 };
 
-
-
 window.addEventListener( "load", async _=>{
 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 	App = new Starter( { webgl2:false, grid:true } );
-	App.setCamera( 45, 20, 6, [0,0.8,0] );
+	App.setCamera( 60, 20, 9, [0,0.8,0] );
     App.onRender = onRender;
 
     App.add( (Debug.pnt = new ShapePointsMesh() ) );
     App.add( (Debug.ln  = new DynLinesMesh() ) );
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    const gltf = await Gltf2.fetch( '../../assets/models/marble_kit.gltf' );
-    let mesh = UtilGltf2.loadMesh( gltf, 'slant_solid_long_C', new THREE.MeshPhongMaterial() );
-    App.add( mesh );
-    Ref.track = [ mesh ];
-
-    mesh = UtilGltf2.loadMesh( gltf, 'bend_medium', new THREE.MeshPhongMaterial() );
-    mesh.rotation.y = Math.PI * 0.5;
-    mesh.position.x = 1.5;
-    mesh.position.z = 2.0;
-    App.add( mesh );
-
-    Ref.track.push( mesh );
-
-    const geo    = new THREE.SphereGeometry( Ref.radius, 16, 8 );
-    const sphere = new THREE.Mesh( geo, new THREE.MeshPhongMaterial( { color: 0xffff00 } ) );
-    sphere.position.fromArray( [0,2.5,-0.5] );
-    App.add( sphere );
-    
-    Ref.marble = sphere
-    Ref.rbody  = new RigidBody()
-        .setMesh( sphere )
-        .setRadius( Ref.radius )
-        .setPosition( sphere.position.toArray() );
-
-    Ref.rbody.useGravity = true;
+    const loader = await new TrackLoader().init();
+    const meshes = loader.loadSet([
+        { name: 'slant_solid_long_C' },
+        { name: 'bend_medium', pos: [1.5, 0, 2.0], rot: [0,Math.PI * 0.5,0] },
+    ], App );
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    rayTest( mesh );
+    Ref.sim = new Simulation();
+    Ref.sim.setPosition( [0,2.5,-0.5] );
+    Ref.sim.tracks = meshes;
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    // sphere.position.fromArray( hitPos );
-    // sphere.position.y += 0.3;
+    Ref.sim.update( 0.01 );
     App.render();
 });
 
 let physicTick = -1;
 let run = true;
 function onRender( dt, et ){
-    let t = Math.floor( et / 0.01 );
-    if( t !== physicTick && run ){
-        physicTick = t;
+    Ref.sim.update( dt );
 
-        rayCast();
-        if( Ref.onSurface ){
-            slopForce();
-            Ref.rbody.addForce( Ref.surfaceF );
-            Ref.rbody.useGravity = false;
-        }else{
-            Ref.rbody.useGravity = true;
-        }
+    // let t = Math.floor( et / 0.01 );
+    // if( t !== physicTick && run ){
+    //     physicTick = t;
+
+    //     rayCast();
+    //     if( Ref.onSurface ){
+    //         slopForce();
+    //         Ref.rbody.addForce( Ref.surfaceF );
+    //         Ref.rbody.useGravity = false;
+    //     }else{
+    //         Ref.rbody.useGravity = true;
+    //     }
         
-        if( run ) Ref.rbody.update( dt );
+    //     if( run ) Ref.rbody.update( dt );
 
-        if( Ref.rbody.position[1] < -1 ){
-            Ref.rbody.setPosition( [0,2.5,-0.5] ).resetVelocity();
-        }
-    }
+    //     if( Ref.rbody.position[1] < -1 ){
+    //         Ref.rbody.setPosition( [0,2.5,-0.5] ).resetVelocity();
+    //     }
+    // }
     
 }
 
@@ -177,7 +159,7 @@ function rayTest( mesh ){
 class RigidBody{
     // #region MAIN
     mesh            = null;
-    useGravity      = false;
+    useGravity      = true;
 
     mass            = 1;
     friction        = 0.4;
@@ -187,7 +169,10 @@ class RigidBody{
     linVelocity     = [0,0,0];
     angVelocity     = [0,0,0];
     
-    gravity         = [0,-9.81,0];      // Downward Force
+    gravityConst    = 9.81;
+    gravityNorm     = [0,-1,0];
+    gravity         = vec3.scale( [0,0,0], this.gravityNorm, this.gravityConst );
+
     force           = [0,0,0];          // Linear Force
     torque          = [0,0,0];          // Angular Force
 
@@ -234,6 +219,13 @@ class RigidBody{
             const torque = vec3.cross( [0,0,0], atPos, force );
             vec3.add( this.torque, this.torque, torque );
         }
+        return this;
+    }
+
+    addSurfaceForce( surfNorm ){
+        const d = vec3.dot( surfNorm, this.gravityNorm );
+        const f = vec3.scale( [0,0,0], surfNorm, d * -this.gravityConst );
+        vec3.add( this.force, this.force, f );
         return this;
     }
     // #endregion
@@ -293,5 +285,119 @@ class RigidBody{
     }
 }
 
+
+class Simulation{
+    // #region MAIN
+    tracks      = null;
+    marble      = null;
+    radius      = 0.3;
+
+    caster      = new THREE.Raycaster();
+    ray         = this.caster.ray;
+
+    time        = 0;
+    tickLimit   = 0.05;
+
+    surface     = {
+        range       : this.radius + 0.001,
+        pos         : [0,0,0],
+        norm        : [0,0,0],
+        touching    : false,
+        collision   : false,
+    };
+
+    constructor(){
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // Create sphere with rigidbody
+        const geo    = new THREE.SphereGeometry( this.radius, 16, 8 );
+        const sphere = new THREE.Mesh( geo, new THREE.MeshPhongMaterial( { color: 0xffff00 } ) );
+        App.add( sphere );
+    
+        this.marble = new RigidBody()
+            .setMesh( sphere )
+            .setRadius( this.radius );
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        this.caster.far = this.radius * 3;
+    }
+    // #endregion
+
+    // #region METHODS
+    setPosition( pos ){ this.marble.setPosition( pos ); return this; }
+    // #endregion
+
+    runRaycasts(){
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // Setup Ray
+        const pos = this.marble.position.slice();
+        const dir = [ 0, -1, 0 ];
+        //pos[1] += this.radius * 1.1;
+
+        //console.log( pos );
+
+        this.ray.origin.fromArray( pos );
+        this.ray.direction.fromArray( dir );
+
+        Debug.ln.add( pos, vec3.scaleAndAdd( dir, pos, dir, this.caster.far ), 0x00ffff );
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // Run raycast to find surface below marble
+        const hits = this.caster.intersectObjects( this.tracks, true );
+        if( hits.length ){
+            const h       = hits[ 0 ];
+            let   inRange = ( h.distance <= this.surface.range );
+
+            // Set surface information
+            vec3.set( this.surface.pos, h.point.x, h.point.y, h.point.z );
+            vec3.set( this.surface.norm, h.face.normal.x, h.face.normal.y, h.face.normal.z );
+           
+            this.surface.collision = ( !this.surface.touching && inRange ); // Did marble just hit the surface in this frame?
+            this.surface.touching  = inRange;                               // Set if the marbile is touching a surface
+
+            // Debug surface position & normal
+            Debug.ln.add( this.surface.pos, vec3.scaleAndAdd( [0,0,0], this.surface.pos, this.surface.norm, 5 ), 0xff0000 );
+            Debug.pnt.add( this.surface.pos, 0xff0000, 5, 6 );  
+        }else{
+            this.surface.touching = false;
+        }
+    }
+
+    update( dt ){
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        this.time += dt;
+        if( this.time < this.tickLimit ) return;
+        this.time = 0;
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        Debug.ln.reset();
+        Debug.pnt.reset();
+
+        this.marble.update( dt );
+        this.runRaycasts();
+
+        if( this.surface.collision ){
+            this.marble.scaleVelocity( 0.5 );
+            console.log( 'collision' );
+        }
+
+        if( this.surface.touching ){
+            const v = vec3.sub( [0,0,0], this.marble.position, this.surface.pos );
+            vec3.normalize( v, v );
+            vec3.scale( v, v, this.radius );
+            vec3.add( v, this.surface.pos, v );
+
+            this.marble.setPosition( v );
+            this.marble.addSurfaceForce( this.surface.norm );
+        }
+
+        Debug.ln.add( this.marble.position, vec3.add([0,0,0], this.marble.position, this.marble.linVelocity ), 0xffff00 );
+
+        Debug.ln._updateGeometry();
+        Debug.pnt._updateGeometry();
+
+        // RayCast to determine if touching the surface
+        // Test
+    }
+}
 
 </script></body></html>
