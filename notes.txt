@@ -1,0 +1,10 @@
+https://github.com/gszauer/GamePhysicsCookbook/blob/master/Code/RigidbodyVolume.cpp
+
+
+https://github.com/gkjohnson/three-mesh-bvh/blob/e44a9188adf476bdc75f11b272b035bc2a79531c/src/math/MathUtilities.js#L160
+
+https://stackoverflow.com/questions/34043955/detect-collision-between-sphere-and-triangle-in-three-js
+
+https://developer.mozilla.org/en-US/docs/Games/Techniques/3D_collision_detection
+https://studiofreya.com/3d-math-and-physics/sphere-vs-aabb-collision-detection-test/
+https://developer.mozilla.org/en-US/docs/Games/Techniques/3D_collision_detection/Bounding_volume_collision_detection_with_THREE.js
