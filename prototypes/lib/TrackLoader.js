@@ -22,9 +22,12 @@ export default class TrackLoader{
         const rtn       = [];
         for( const i of ary ){
             const mesh = this.loadMesh( i.name, parent, material );
+            mesh.geometry.computeBoundingBox();
+
             if( i.pos ) mesh.position.fromArray( i.pos );
             if( i.rot ) mesh.rotation.fromArray( i.rot );
 
+            mesh.updateMatrixWorld( true ); // Update tile's world matrix off the bat, its static so it shouldn't change
             rtn.push( mesh );
         }
 

@@ -1,0 +1,91 @@
+<!DOCTYPE html><html><head><title></title></head><body><script src="../import-map.js"></script><script type="module">
+import Starter, { THREE }   from '../lib/Starter.js';
+import ShapePointsMesh     	from '../lib/meshes/ShapePointsMesh.js';
+import DynLinesMesh        	from '../lib/meshes/DynLineMesh.js';
+import { UtilGltf2, Gltf2 } from '../lib/UtilGltf2.js';
+import { vec3, quat }       from 'gl-matrix';
+import TrackLoader          from './lib/TrackLoader.js';
+
+import Ray                  from '../lib/ray/Ray.js';
+import sphereCast           from '../lib/ray/sphereCast.js';
+import { from3JSScreenProjection }  from '../lib/ray/UtilRay.js';
+
+let App;
+let Debug = {};
+let Ref   = {
+    radius : 0.3,
+};
+
+window.addEventListener( "load", async _=>{
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	App = new Starter( { webgl2:false, grid:true } );
+	App.setCamera( 0, 40, 8, [0,0.0,0] );
+    //App.onRender = onRender;
+
+    App.add( (Debug.pnt = new ShapePointsMesh() ) );
+    App.add( (Debug.ln  = new DynLinesMesh() ) );
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    const loader = await new TrackLoader().init();
+    const meshes = loader.loadSet([
+        { name: 'slant_solid_long_C' },
+        { name: 'bend_medium', pos: [1.5, 0, 2.0], rot: [0,Math.PI * 0.5,0] },
+    ], App );
+
+    Ref.tracks = meshes;
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    // const bMin     = meshes[1].geometry.boundingBox.min.toArray();
+    // const bMax     = meshes[1].geometry.boundingBox.max.toArray();
+    // const mat      = meshes[1].matrixWorld.toArray();
+
+    // Debug.ln.box( bMin, bMax, 0x707070 );
+
+    // vec3.transformMat4( bMin, bMin, mat );
+    // vec3.transformMat4( bMax, bMax, mat );
+    // Debug.ln.box( bMin, bMax, 0x00ff00 );
+
+    // const a = [-0.000009086186549459585, 12.540455932120754, 0.0006735328822279939] 
+    // const b = [-0.012549851372373869, -87.42639703041583, 6.646317877168991]
+    // const a = [-0.37049778576478404, 12.53313223459601, 0.18614092440146288]
+    // const b = [1.784075075379714, -87.47000358748718, 2.835869042604379]
+    // const r = new Ray().fromEndPoints( a, b );
+    // Debug.ln.add( r.posStart, r.posEnd, 0x00ffff );
+    // sphereCast( r, Ref.radius, Ref.tracks, Debug );
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+
+    App.render();
+});
+
+function onRender( dt, et ){
+    
+}
+
+window.addEventListener( "pointerdown", e=>{
+    if( e.button != 2 ) return;
+
+    Debug.ln.reset();
+    Debug.pnt.reset();
+    
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    // Compute the Ray and visually draw a line
+    const ray = from3JSScreenProjection( new Ray(), e.layerX, e.layerY, App );
+    Debug.ln.add( ray.posStart, ray.posEnd, 0x00ffff );
+    // console.log( ray.posStart, ray.posEnd );
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    const hit = sphereCast( ray, Ref.radius, Ref.tracks, Debug );
+    if( hit ){
+        Debug.pnt.add( hit.hitpos, 0x000000, 1 );
+        console.log( hit.faces );
+    }
+} );
+
+</script>
+<div style="position:fixed; bottom:10px; left:10px;">
+    Right click to execute a screen space ray
+</div>
+</body></html>
