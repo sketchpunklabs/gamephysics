@@ -1,0 +1,391 @@
+<!DOCTYPE html><html><head><title></title></head><body><script src="../import-map.js"></script><script type="module">
+// #region IMPORT
+import Starter, { THREE }   from '../lib/Starter.js';
+import ShapePointsMesh     	from '../lib/meshes/ShapePointsMesh.js';
+import DynLinesMesh        	from '../lib/meshes/DynLineMesh.js';
+import { UtilGltf2, Gltf2 } from '../lib/UtilGltf2.js';
+import { vec3, quat }       from 'gl-matrix';
+import TrackLoader          from './lib/TrackLoader.js';
+
+import Ray                  from '../lib/ray/Ray.js';
+import sphereCast           from '../lib/ray/sphereCast.js';
+import { from3JSScreenProjection }  from '../lib/ray/UtilRay.js';
+// #endregion
+
+// #region MAIN
+let App;
+let Debug = {};
+let Ref   = {};
+
+window.addEventListener( "load", async _=>{
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	App = new Starter( { webgl2:false, grid:true } );
+	App.setCamera( -45, 20, 5, [0,0.8,0] );
+    App.onRender = onRender;
+
+    App.add( (Debug.pnt = new ShapePointsMesh() ) );
+    App.add( (Debug.ln  = new DynLinesMesh() ) );
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    const loader = await new TrackLoader().init();
+    const meshes = loader.loadSet([
+        { name: 'slant_solid_long_C' },
+        { name: 'bend_medium', pos: [1.5, 0, 2.0], rot: [0,Math.PI * 0.5,0] },
+    ], App );
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Ref.sim = new Simulation();
+    Ref.sim.setPosition( [0,3.5,-0.5] );
+    Ref.sim.tracks = meshes;
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    // setTimeout( ()=>{
+    //     Ref.sim.update( 0.01 );
+    // }, 50 );
+
+    App.render();
+});
+
+function onRender( dt, et ){
+    Ref.sim.update( dt );
+}
+// #endregion
+
+
+// Note: Impulse is a one time Force applied but as force = impulse * mass
+class RigidBody{
+    // #region MAIN
+    mesh            = null;
+    useGravity      = true;
+
+    mass            = 1;
+    friction        = 0.4;
+    
+    position        = [0,0,0];
+    rotation        = [0,0,0,1];
+    linVelocity     = [0,0,0];
+    angVelocity     = [0,0,0];
+    
+    gravityConst    = 9.81;
+    gravityNorm     = [0,-1,0];
+    gravity         = vec3.scale( [0,0,0], this.gravityNorm, this.gravityConst );
+
+    force           = [0,0,0];          // Linear Force
+    torque          = [0,0,0];          // Angular Force
+
+    // Hollow Sphere Inertia = 2/3 * ( mr^2 )
+    // Solid Sphere Inertia  = 2/5 * ( mr^2 )
+    radius          = 1.0;
+    inertia         = 2/5 * ( this.mass * ( this.radius**2 ) );
+
+    constructor(){}
+    // #endregion
+
+    // #region SETTERS
+    setMesh( m ){ this.mesh = m; return this; }
+
+    resetVelocity(){
+        vec3.set( this.linVelocity, 0, 0, 0 );
+        vec3.set( this.angVelocity, 0, 0, 0 );
+        return this;
+    }
+
+    scaleVelocity( scl ){
+        vec3.scale( this.linVelocity, this.linVelocity, scl );
+        vec3.scale( this.angVelocity, this.angVelocity, scl );
+        return this;
+    }
+    
+    setPosition( p ){ 
+        vec3.copy( this.position, p );
+        if( this.mesh ) this.mesh.position.fromArray( p );
+        return this;
+    }
+    
+    setRadius( r ){
+        this.radius     = r;
+        this.inertia    = 2/5 * ( this.mass * ( this.radius**2 ) );
+        return this;
+    }
+
+    addForce( force, atPos=null ){
+        vec3.add( this.force, this.force, force );
+        if( atPos ){
+            // 2D Torque = radius.x * force.y - radius.y * force.x ( Radius = PointOfForce - CenterOfMass )
+            // 3D Torque = cross( radius, force );
+            const torque = vec3.cross( [0,0,0], atPos, force );
+            vec3.add( this.torque, this.torque, torque );
+        }
+        return this;
+    }
+
+    addSurfaceForce( surfNorm ){
+        const d = vec3.dot( surfNorm, this.gravityNorm );
+        const f = vec3.scale( [0,0,0], surfNorm, d * -this.gravityConst );
+        vec3.add( this.force, this.force, f );
+        return this;
+    }
+    // #endregion
+
+    update( dt ){
+        const accel = [0,0,0];
+        const f     = [0,0,0];
+        const tmp   = [0,0,0];
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // Accumulate Forces
+        vec3.add( f, f, this.force );
+        if( this.useGravity ) vec3.add( f, f, this.gravity );
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // Handle Linear Velocity
+
+        // Acceleration  = force / mass
+        vec3.scale( accel, f, 1 / this.mass );                                  
+        
+        // Velocity += Acceleration * Time
+        vec3.scaleAndAdd( this.linVelocity, this.linVelocity, accel, dt );      
+
+        // Velocity += Invert( Vel ) * Factor * Time
+        vec3.scaleAndAdd( this.linVelocity, this.linVelocity, this.linVelocity, -this.friction * dt ); 
+
+        // Position += Velocity * Time
+        vec3.scaleAndAdd( this.position, this.position, this.linVelocity, dt ); 
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // Handle Anglular Velocity
+        const angAccel = vec3.scale( [0,0,0], this.torque, 1 / this.inertia );
+
+        // Velocity += Acceleration + dt;
+        vec3.scaleAndAdd( this.angVelocity, this.angVelocity, angAccel, dt );
+
+        // Velocity += Invert( Vel ) * Factor * Time
+        vec3.scaleAndAdd( this.angVelocity, this.angVelocity, this.angVelocity, -this.friction * dt ); 
+
+        // Angular Change = Velocity * Time
+        const axis    = vec3.scale( [0,0,0], this.angVelocity, dt );
+        const angDist = vec3.length( axis ); // Length is the angle of rotation
+        vec3.normalize( axis, axis );        // Normalize to get axis of rotation for
+    
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // Apply Position
+        this.mesh.position.fromArray( this.position );
+
+        // Apply Rotation
+        const q = quat.setAxisAngle( [0,0,0,1], axis, angDist );
+        quat.mul( this.rotation, q, this.rotation );
+        this.mesh.quaternion.fromArray( this.rotation );
+
+        // Reset
+        vec3.set( this.force, 0, 0, 0 );
+        vec3.set( this.torque, 0, 0, 0 );
+    }
+}
+
+
+class Simulation{
+    // #region MAIN
+    tracks      = null;
+    marble      = null;
+    radius      = 0.3;
+    castRadius  = this.radius + 0.01;
+    surfaceRng  = this.radius + 0.01;
+
+    // caster      = new THREE.Raycaster();
+    // ray         = this.caster.ray;
+    ray         = new Ray();
+    time        = 0;
+    tickLimit   = 0.1;
+
+    constructor(){
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // Create sphere with rigidbody
+        const geo    = new THREE.SphereGeometry( this.radius, 16, 8 );
+        const sphere = new THREE.Mesh( geo, new THREE.MeshPhongMaterial( { color: 0xffff00 } ) );
+        App.add( sphere );
+    
+        this.marble = new RigidBody()
+            .setMesh( sphere )
+            .setRadius( this.radius );
+    }
+    // #endregion
+
+    // #region METHODS
+    setPosition( pos ){ this.marble.setPosition( pos ); return this; }
+    // #endregion
+
+    runRaycasts(){
+        const pos = this.marble.position.slice();
+        const v   = [0,0,0];
+        let   cnt = 0;
+        
+        this.ray.origin.fromArray( pos );
+        
+        for( const i of this.rays ){
+            // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+            this.ray.direction.fromArray( i.dir );
+            this.caster.far = i.rng;
+
+            Debug.ln.add( pos, vec3.scaleAndAdd( v, pos, i.dir, i.rng ), 0x00ffff );
+
+            // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            const hits = this.caster.intersectObjects( this.tracks, true );
+            if( hits.length ){
+                const h = hits[ 0 ];
+
+                // Get hit information
+                vec3.set( i.hitPos,  h.point.x,       h.point.y,       h.point.z );
+                vec3.set( i.hitNorm, h.face.normal.x, h.face.normal.y, h.face.normal.z );
+                
+                // Is there a any collision or touching of a surface
+                let inLimit = ( h.distance <= i.lmt );
+                i.collision = ( !i.hasTouch && inLimit ); // Did marble just hit the surface in this frame?
+                i.hasTouch  = inLimit;                    // Set if the marbile is touching a surface
+
+                if( inLimit ) cnt++;
+
+                Debug.pnt.add( i.hitPos, 0xff0000, 3 );
+                Debug.ln.add( i.hitPos, vec3.add( v, i.hitPos, i.hitNorm ), 0xff0000 );
+
+            }else{
+                i.hasTouch  = false;
+                i.collision = false;
+            }
+        }
+
+        return cnt;
+    }
+
+    processRaycasts(){
+        const pos = this.marble.position.slice();
+        const dir = [0,0,0];
+        const v   = [0,0,0];
+
+        for( const i of this.rays ){
+            if( !i.hasTouch ) continue;
+
+            vec3.add( dir, dir, i.hitNorm );
+
+            // TODO: Maybe add up all "position" & avg for final position
+            vec3.sub( v, pos, i.hitPos );
+            vec3.normalize( v, v );
+            vec3.scale( v, v, this.radius );
+            vec3.add( pos, i.hitPos, v );
+        }
+
+        this.marble.setPosition( pos ); // Set marble on surface 
+        vec3.normalize( dir, dir );     // Normalize total surface force
+        
+        this.marble.addSurfaceForce( dir );
+
+        Debug.ln.add( pos, vec3.scaleAndAdd( [0,0,0], pos, dir, 2 ), 0xffff00 );
+    }
+
+    runSpherecast(){
+        const spos = this.marble.position.slice();
+        const epos = vec3.scaleAndAdd( [0,0,0], spos, [0,-1,0], 3 );
+        Debug.ln.add( spos, epos, 0x00ffff );
+
+        this.ray.fromEndPoints( spos, epos );
+
+        const hit = sphereCast( this.ray, this.castRadius, this.tracks, Debug );
+        if( hit ){
+            Debug.pnt.add( hit.hitpos, 0x000000, 3 );
+
+            // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            const avgNorm   = [0,0,0];
+            //const avgPos    = [0,0,0];
+            const sqrRange  = this.surfaceRng**2;
+            const dir       = [0,0,0];
+            let cnt         = 0;
+
+            let isDirect = false
+
+            for( const f of hit.faces ){
+                // -------------------------------------------
+                vec3.sub( dir, spos, f.center );                // Direction from surface to sphere
+                //console.log( vec3.sqrLen( dir ), sqrRange );
+                if( vec3.sqrLen( dir ) > sqrRange ) continue;   // Not touching surface, skip triangle
+
+                // -------------------------------------------
+                // Merge all touching surface normals.
+                vec3.add( avgNorm, avgNorm, f.norm );
+                
+                // -------------------------------------------
+                // On contact, must make sure sphere does not go threw the triangles
+                // So for every contact triangle compute the average position to
+                // put the sphere
+                // vec3.normalize( dir, dir );
+                // vec3.scaleAndAdd( dir, f.center, dir, this.radius );
+                // vec3.add( avgPos, avgPos, dir );
+
+                // -------------------------------------------
+                Debug.ln.add( f.center, vec3.scaleAndAdd( [0,0,0], f.center, f.norm, 1 ), 0xff0000 );
+                cnt++;
+            }
+
+            vec3.sub( dir, spos, hit.hitpos );
+            if( vec3.sqrLen( dir ) < sqrRange ){
+                vec3.normalize( dir, dir );
+                vec3.scaleAndAdd( spos, hit.hitpos, dir, this.radius );
+                isDirect = true;
+            }
+
+            // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            // There is surface contact
+
+            if( isDirect || cnt > 0 ){
+                this.marble.setPosition( spos );
+            }
+
+            if( cnt > 0 ){
+                // Compute an position for sphere
+                // vec3.scale( avgPos, avgPos, s );                            // Average all the positions from triangles
+                // vec3.scaleAndAdd( dir, hit.hitpos, [0,1,0], this.radius );  // Compute position over direct ray hit position
+                // vec3.add( avgPos, avgPos, dir );                            // Add to average...
+                // vec3.scale( avgPos, avgPos, 0.5 );                          // To give the hit position at least 50 influence
+
+                //vec3.scale( avgPos, avgPos, s );                            // Average all the positions from triangles
+                // vec3.scaleAndAdd( dir, hit.hitpos, [0,1,0], this.radius );  // Compute position over direct ray hit position
+                // vec3.add( avgPos, avgPos, dir );                            // Add to average...
+                // vec3.scale( avgPos, avgPos, s );                          // To give the hit position at least 50 influence
+
+                //console.log( avgPos );
+
+                //this.marble.setPosition( avgPos ); // Set marble on surface 
+
+                // Compute surface force direction
+                vec3.scale( avgNorm, avgNorm, 1/cnt );                          // Average normal direction
+
+                //console.log( cnt, avgNorm );
+                this.marble.addSurfaceForce( avgNorm );
+
+                // Debug
+                Debug.ln.add( spos, vec3.scaleAndAdd([0,0,0], spos, avgNorm, 2 ), 0xffff00 );
+            }
+        }
+
+        // const r = new Ray().fromEndPoints( a, b );
+        // Debug.ln.add( r.posStart, r.posEnd, 0x00ffff );
+    }
+
+    update( dt ){
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        this.time += dt;
+        if( this.time < this.tickLimit ) return;
+        this.time = 0;
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        Debug.ln.reset();
+        Debug.pnt.reset();
+
+        this.marble.update( dt );
+        this.runSpherecast();
+        //if( this.runRaycasts() > 0 ) this.processRaycasts();
+    
+        Debug.ln._updateGeometry();
+        Debug.pnt._updateGeometry();
+    }
+}
+
+</script></body></html> 

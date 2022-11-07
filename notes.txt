@@ -8,3 +8,13 @@ https://stackoverflow.com/questions/34043955/detect-collision-between-sphere-and
 https://developer.mozilla.org/en-US/docs/Games/Techniques/3D_collision_detection
 https://studiofreya.com/3d-math-and-physics/sphere-vs-aabb-collision-detection-test/
 https://developer.mozilla.org/en-US/docs/Games/Techniques/3D_collision_detection/Bounding_volume_collision_detection_with_THREE.js
+
+
+
+
+https://answers.unity.com/questions/1899848/find-closest-point-in-triangle-to-triangle.html
+
+
+COOL ARTICLE ABOUT CONTROLLING OBJECTS WITH FORCES AND TORQUES
+Lots of Math + Code
+https://digitalopus.ca/site/pd-controllers/
